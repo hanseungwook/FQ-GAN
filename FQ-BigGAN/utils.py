@@ -418,6 +418,8 @@ dset_dict = {'I32': dset.ImageFolder, 'I64': dset.ImageFolder,
              'I128': dset.ImageFolder, 'I256': dset.ImageFolder,
              'I32_hdf5': dset.ILSVRC_HDF5, 'I64_hdf5': dset.ILSVRC_HDF5, 
              'I128_hdf5': dset.ILSVRC_HDF5, 'I256_hdf5': dset.ILSVRC_HDF5,
+             'WT64': dset.ImageFolder, 'WT64_hdf5': dset.ImageFolder,
+             'D128': dset.ImageFolder, 'D128_hdf5': dset.ImageFolder,
              'C10': dset.CIFAR10, 'C100': dset.CIFAR100,
              'I64ext': dset.ImageFolder, 'I64ext_hdf5': dset.ILSVRC_HDF5,
              'I128ext': dset.ImageFolder, 'I128ext_hdf5': dset.ILSVRC_HDF5}
@@ -427,18 +429,24 @@ imsize_dict = {'I32': 32, 'I32_hdf5': 32,
                'I256': 256, 'I256_hdf5': 256,
                'C10': 32, 'C100': 32,
                'I64ext': 64, 'I64ext_hdf5': 64,
-               'I128ext': 128, 'I128ext_hdf5': 128}
+               'I128ext': 128, 'I128ext_hdf5': 128,
+               'WT64': 64, 'WT64_hdf5': 64,
+               'D128': 128, 'D128_hdf5': 128}
 root_dict = {'I32': 'ImageNet', 'I32_hdf5': 'ILSVRC32.hdf5',
              'I64': 'ImageNet', 'I64_hdf5': 'ILSVRC64.hdf5',
              'I128': 'ImageNet', 'I128_hdf5': 'ILSVRC128.hdf5',
              'I256': 'ImageNet', 'I256_hdf5': 'ILSVRC256.hdf5',
              'C10': 'cifar', 'C100': 'cifar',
              'I64ext': 'Ext', 'I64ext_hdf5': 'I64Ext.hdf5',
-             'I128ext': 'Ext', 'I128ext_hdf5': 'I128Ext.hdf5',}
+             'I128ext': 'Ext', 'I128ext_hdf5': 'I128Ext.hdf5',
+             'WT64': '', 'WT64_hdf5': '',
+             'D128': '', 'D128_hdf5': '',}
 nclass_dict = {'I32': 1000, 'I32_hdf5': 1000,
                'I64': 1000, 'I64_hdf5': 1000,
                'I128': 1000, 'I128_hdf5': 1000,
                'I256': 1000, 'I256_hdf5': 1000,
+               'WT64': 1000, 'WT64_hdf5': 1000,
+               'D128': 1000, 'D128_hdf5': 1000,
                'C10': 10, 'C100': 100,
                'I64ext': 20, 'I64ext_hdf5': 20,
                'I128ext': 10, 'I128ext_hdf5': 10}
@@ -447,12 +455,104 @@ classes_per_sheet_dict = {'I32': 50, 'I32_hdf5': 50,
                           'I64': 50, 'I64_hdf5': 50,
                           'I128': 20, 'I128_hdf5': 20,
                           'I256': 20, 'I256_hdf5': 20,
+                          'WT64': 1000, 'WT64_hdf5': 1000,
+                          'D128': 1000, 'D128_hdf5': 1000,
                           'C10': 10, 'C100': 100,
                           'I64ext': 20, 'I64ext_hdf5': 20,
                           'I128ext': 20, 'I128ext_hdf5': 20}
+
 activation_dict = {'inplace_relu': nn.ReLU(inplace=True),
                    'relu': nn.ReLU(inplace=False),
                    'ir': nn.ReLU(inplace=True),}
+
+norm_dict = {}
+
+# WT filter creating function
+def create_filters(device, wt_fn='bior2.2'):
+  w = pywt.Wavelet(wt_fn)
+
+  dec_hi = torch.Tensor(w.dec_hi[::-1]).to(device)
+  dec_lo = torch.Tensor(w.dec_lo[::-1]).to(device)
+
+  filters = torch.stack([dec_lo.unsqueeze(0)*dec_lo.unsqueeze(1),
+                          dec_lo.unsqueeze(0)*dec_hi.unsqueeze(1),
+                          dec_hi.unsqueeze(0)*dec_lo.unsqueeze(1),
+                          dec_hi.unsqueeze(0)*dec_hi.unsqueeze(1)], dim=0)
+
+  return filters
+
+# IWT filter creating function
+def create_inv_filters(device, wt_fn='bior2.2'):
+  w = pywt.Wavelet(wt_fn)
+
+  rec_hi = torch.Tensor(w.rec_hi).to(device)
+  rec_lo = torch.Tensor(w.rec_lo).to(device)
+  
+  inv_filters = torch.stack([rec_lo.unsqueeze(0)*rec_lo.unsqueeze(1),
+                              rec_lo.unsqueeze(0)*rec_hi.unsqueeze(1),
+                              rec_hi.unsqueeze(0)*rec_lo.unsqueeze(1),
+                              rec_hi.unsqueeze(0)*rec_hi.unsqueeze(1)], dim=0)
+
+  return inv_filters
+
+# WT function
+def wt(vimg, filters, levels=1):
+  bs = vimg.shape[0]
+  h = vimg.size(2)
+  w = vimg.size(3)
+  vimg = vimg.reshape(-1, 1, h, w)
+  padded = torch.nn.functional.pad(vimg,(2,2,2,2))
+  res = torch.nn.functional.conv2d(padded, Variable(filters[:,None]),stride=2)
+  if levels>1:
+      res[:,:1] = wt(res[:,:1], filters, levels-1)
+      res[:,:1,32:,:] = res[:,:1,32:,:]*1.
+      res[:,:1,:,32:] = res[:,:1,:,32:]*1.
+      res[:,1:] = res[:,1:]*1.
+  res = res.view(-1,2,h//2,w//2).transpose(1,2).contiguous().view(-1,1,h,w)
+  return res.reshape(bs, -1, h, w)
+
+
+# IWT function
+def iwt(vres, inv_filters, levels=1):
+  bs = vres.shape[0]
+  h = vres.size(2)
+  w = vres.size(3)
+  vres = vres.reshape(-1, 1, h, w)
+  res = vres.contiguous().view(-1, h//2, 2, w//2).transpose(1, 2).contiguous().view(-1, 4, h//2, w//2).clone()
+  if levels > 1:
+      res[:,:1] = iwt(res[:,:1], inv_filters, levels=levels-1)
+  res = torch.nn.functional.conv_transpose2d(res, Variable(inv_filters[:,None]),stride=2)
+  res = res[:,:,2:-2,2:-2] #removing padding
+
+  return res.reshape(bs, -1, h, w)
+  
+def denormalize(x, shift, scale):
+  return x*scale - shift
+    
+def normalize(x, shift, scale):
+  return (x + shift) / scale
+  
+def load_norm_dict(path):
+  loaded = np.load(path)
+  
+  global norm_dict
+  norm_dict = loaded
+  return norm_dict
+
+def get_norm_dict():
+  assert (len(norm_dict) > 0)
+
+  return norm_dict
+
+# Create padding on patch so that this patch is formed into a square image with other patches as 0
+# 3 x 128 x 128 => 3 x target_dim x target_dim
+def zero_pad(img, target_dim, device='cpu'):
+  batch_size = img.shape[0]
+  num_channels = img.shape[1]
+  padded_img = torch.zeros((batch_size, num_channels, target_dim, target_dim), device=device)
+  padded_img[:, :, :img.shape[2], :img.shape[3]] = img.to(device)
+  
+  return padded_img
 
 class CenterCropLongEdge(object):
   """Crops the given PIL Image on the long edge.
@@ -552,11 +652,12 @@ def get_data_loaders(dataset, data_root=None, augment=False, batch_size=64,
 
   # Append /FILENAME.hdf5 to root if using hdf5
   data_root += '/%s' % root_dict[dataset]
+  # data_root = 
   print('Using dataset root location %s' % data_root)
 
   which_dataset = dset_dict[dataset]
-  norm_mean = [0.5,0.5,0.5]
-  norm_std = [0.5,0.5,0.5]
+  # norm_mean = [0.5,0.5,0.5]
+  # norm_std = [0.5,0.5,0.5]
   image_size = imsize_dict[dataset]
   # For image folder datasets, name of the file where we store the precomputed
   # image locations to avoid having to walk the dirs every time we load.
@@ -580,11 +681,12 @@ def get_data_loaders(dataset, data_root=None, augment=False, batch_size=64,
       if dataset in ['C10', 'C100']:
         train_transform = []
       else:
-        train_transform = [CenterCropLongEdge(), transforms.Resize(image_size)]
-      # train_transform = [transforms.Resize(image_size), transforms.CenterCrop]
-    train_transform = transforms.Compose(train_transform + [
-                     transforms.ToTensor(),
-                     transforms.Normalize(norm_mean, norm_std)])
+        train_transform = [CenterCropLongEdge(), 
+                           transforms.Resize(image_size*4), # 64*4 = 256
+                           transforms.ToTensor()]
+        # train_transform = [transforms.Resize(image_size), transforms.CenterCrop]
+    train_transform = transforms.Compose(train_transform)
+    
   train_set = which_dataset(root=data_root, transform=train_transform,
                             load_in_mem=load_in_mem, **dataset_kwargs)
 
@@ -927,7 +1029,7 @@ def sample_sheet(G, classes_per_sheet, num_classes, samples_per_class, parallel,
     image_filename = '%s/%s/%d/samples%d.jpg' % (samples_root, experiment_name, 
                                                  folder_number, i)
     torchvision.utils.save_image(out_ims, image_filename,
-                                 nrow=samples_per_class, normalize=True)
+                                 nrow=samples_per_class, normalize=False)
 
 
 # Interp function; expects x0 and x1 to be of shape (shape0, 1, rest_of_shape..)
@@ -970,7 +1072,7 @@ def interp_sheet(G, num_per_sheet, num_midpoints, num_classes, parallel,
                                                 folder_number, interp_style,
                                                 sheet_number)
   torchvision.utils.save_image(out_ims, image_filename,
-                               nrow=num_midpoints + 2, normalize=True)
+                               nrow=num_midpoints + 2, normalize=False)
 
 
 # Convenience debugging function to print out gradnorms and shape from each layer

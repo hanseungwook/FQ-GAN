@@ -247,14 +247,31 @@ def calculate_inception_score(pred, num_splits=10):
 # Inception Accuracy the labels of the generated class will be needed)
 def accumulate_inception_activations(sample, net, num_inception_images=50000):
   pool, logits, labels = [], [], []
+  pool_iwt, logits_iwt, labels_iwt = [], [], []
+  inv_filters = create_inv_filters('cuda')
+  norm_dict = get_norm_dict()
+  shift, scale = torch.from_numpy(norm_dict['shift']), torch.from_numpy(norm_dict['scale'])
+
   while (torch.cat(logits, 0).shape[0] if len(logits) else 0) < num_inception_images:
     with torch.no_grad():
       images, labels_val = sample()
+
+      # Clone, denormalize, pad to 256, and IWT twice
+      images_full = images.clone()
+      images_full = denormalize(images_full, shift.cuda(), scale.cuda())
+      images_full = zero_pad(images, 256, images.device) # Full image size hard-coded
+      images_full = iwt(images_full, inv_filters, levels=2)
+
       pool_val, logits_val = net(images.float())
       pool += [pool_val]
       logits += [F.softmax(logits_val, 1)]
       labels += [labels_val]
-  return torch.cat(pool, 0), torch.cat(logits, 0), torch.cat(labels, 0)
+
+      pool_val_iwt, logits_val_iwt = net(images_full.float())
+      pool_iwt += [pool_val_iwt]
+      logits_iwt += [F.softmax(logits_val_iwt, 1)]
+      labels_iwt += [labels_val]
+  return torch.cat(pool, 0), torch.cat(logits, 0), torch.cat(labels, 0), torch.cat(pool_iwt, 0), torch.cat(logits_iwt, 0), torch.cat(labels_iwt, 0)
 
 
 # Load and wrap the Inception model
