@@ -79,7 +79,7 @@ python train.py \
 --G_eval_mode \
 --G_ch 64 --D_ch 64 \
 --ema --use_ema --ema_start 20000 \
---test_every 1000 --save_every 1000 --num_best_copies 5 --num_save_copies 2 --seed 0 \
+--test_every 5000 --save_every 5000 --num_best_copies 5 --num_save_copies 2 --seed 0 \
 --discrete_layer 2 --commitment 0.5 --dict_size 10 --dict_decay 0.7 \
 --use_multiepoch_sampler --num_epochs=100
 
