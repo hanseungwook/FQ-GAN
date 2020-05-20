@@ -55,6 +55,9 @@ def run(config):
   # Prepare root folders if necessary
   utils.prepare_root(config)
 
+  # Update data directory to Satori version
+  config['data_root'] = data_dir
+
   # Setup cudnn.benchmark for free speed
   torch.backends.cudnn.benchmark = True
 
@@ -181,6 +184,13 @@ def run(config):
         x, y = x.to(device).half(), y.to(device)
       else:
         x, y = x.to(device), y.to(device)
+
+      #### TODO: FIX THIS TO INTERPOLATION
+      # Get 64x64 WT patch and normalize
+      x = utils.wt(x, filters, levels=2)[:, :, :64, :64]
+      x = utils.normalize(x, shift, scale)
+      torch.cuda.empty_cache()
+      
       metrics = train(x, y)
       train_log.log(itr=int(state_dict['itr']), **metrics)
       
