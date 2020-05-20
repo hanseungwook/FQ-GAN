@@ -5,17 +5,17 @@
 ###  cancel jobs using command 'scancel <jobnum>'
 ###  outputs are in  multi_torch_<jobnum>.out and multi_torch_<jobnum>.err
 
-#SBATCH -J fqgan_wt_64
-#SBATCH -o fqgan_wt_64_%j.out
-#SBATCH -e fqgan_wt_64_%j.err
+#SBATCH -J fqgan_dp_wt_64
+#SBATCH -o fqgan_dp_wt_64_%j.out
+#SBATCH -e fqgan_dp_wt_64_%j.err
 
 #SBATCH --mail-user=seungwook.han@ibm.com
 #SBATCH --mail-type=ALL
 ###  the following parameters will get you two nodes with 4 V100's each
 ###  note the run time limit is currently only 12 hours, it will be increased
 ###  next week
-#SBATCH --gres=gpu:1
-#SBATCH --gpus-per-node=1
+#SBATCH --gres=gpu:4
+#SBATCH --gpus-per-node=4
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=8
 #SBATCH --mem=500g
@@ -64,8 +64,8 @@ date
 ###  outputs are in  multi_torch_<jobnum>.out and multi_torch_<jobnum>.err 
 
 python train.py \
---dataset WT64 --shuffle  --num_workers 8 --batch_size 128  \
---base_root /nobackup/users/swhan/BigGAN-PyTorch/results_fqgan/ --data_root /data/ImageNet/ILSVRC2012/train/ \
+--dataset WT64 --parallel --shuffle  --num_workers 8 --batch_size 128  \
+--base_root /nobackup/users/swhan/BigGAN-PyTorch/results_fqgan_parallel/ --data_root /data/ImageNet/ILSVRC2012/train/ \
 --norm_path /nobackup/users/swhan/BigGAN-PyTorch/WT64_norm_values.npz \
 --num_G_accumulations 4 --num_D_accumulations 4 \
 --num_D_steps 1 --G_lr 1e-4 --D_lr 4e-4 --D_B2 0.999 --G_B2 0.999 \
